@@ -1,0 +1,52 @@
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: strawberry_postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - strawberry_network
+
+  backend:
+    build: ./backend
+    image: strawberry-predictor-backend:latest
+    container_name: strawberry_backend
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_HOST: ${POSTGRES_HOST}
+      POSTGRES_PORT: ${POSTGRES_PORT}
+    ports:
+      - "8003:8000"
+    volumes:
+      - ./backend:/app
+    depends_on:
+      - postgres
+    networks:
+      - strawberry_network
+
+  adminer:
+    image: adminer:latest
+    container_name: strawberry_adminer
+    ports:
+      - "8083:8080"
+    environment:
+      ADMINER_DEFAULT_SERVER: postgres
+    depends_on:
+      - postgres
+    networks:
+      - strawberry_network
+
+volumes:
+  postgres_data:
+
+networks:
+  strawberry_network:
+    driver: bridge
