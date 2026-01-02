@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, Date, ForeignKey
+from sqlalchemy import Column, Integer, String, Float, Date, ForeignKey, DateTime
 from .database import Base
 from sqlalchemy.orm import relationship
 
@@ -38,4 +38,28 @@ class WeatherData(Base):
         solar_radiation = Column(Float)  # MJ/m²
         # Précipitations (indicateur humidité ambiante)
         precipitation = Column(Float)  # mm
+        
+class PlantConfiguration(Base):
+        __tablename__ = "plant_configurations" 
+        id = Column(Integer, primary_key=True, index=True)
+        variety_id = Column(Integer, ForeignKey("varieties.id"), nullable=False)
+        start_date = Column(Date, nullable=False, index=True)
+        end_date = Column(Date, nullable=True, index=True)  # NULL = config actuelle
+        plants_nbrs = Column(Integer, nullable=False)
+        # Relations
+        variety = relationship("Variety")
+        
+class Prediction(Base):                    # ← NOUVEAU
+    __tablename__ = "predictions"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    prediction_date = Column(DateTime, nullable=False, index=True)
+    target_date = Column(Date, nullable=False, index=True)
+    variety_id = Column(Integer, ForeignKey("varieties.id"), nullable=False)
+    plants_nbrs = Column(Integer, nullable=False)
+    kg_biological_predicted = Column(Float, nullable=False)
+    kg_produced_predicted = Column(Float, nullable=False)
+    harvest_fraction = Column(Float, nullable=False)
+    
+    variety = relationship("Variety")
     
