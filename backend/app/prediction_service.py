@@ -5,28 +5,71 @@ from datetime import datetime, timedelta, date
 from sqlalchemy.orm import Session
 from .models import Prediction, Variety, PlantConfiguration, HarvestRecord, WeatherData
 from .database import SessionLocal
+import sys
 
-def get_weather_forecast(latitude: float = 43.1397, longitude: float = 6.1556, days: int = 7):
+def get_weather_forecast(latitude: float = 43.1397, longitude: float = 6.1556, days: int = 7,test_date: date = None):
+    """
+    Récupère les prévisions météo depuis Open-Meteo
+    Si test_date fournie et dans le passé → utilise API archive
+    """
+    
+    today = datetime.now().date()
+    reference_date = test_date if test_date else today
+    
+    
     """
     Récupère les prévisions météo depuis Open-Meteo
     """
     url = "https://api.open-meteo.com/v1/forecast"
     
-    params = {
-        "latitude": latitude,
-        "longitude": longitude,
-        "daily": [
-            "temperature_2m_max",
-            "temperature_2m_min",
-            "temperature_2m_mean",
-            "relative_humidity_2m_mean",
-            "precipitation_sum",
-            "sunshine_duration",
-            "shortwave_radiation_sum"
-        ],
-        "forecast_days": days,
-        "timezone": "Europe/Paris"
-    }
+    """
+    Si test_date dans le passé → utiliser archive au lieu de forecast
+    """
+    
+     # Mode test : date passée → API archive
+    if reference_date < today:
+        print(f"   🧪 MODE TEST : Récupération météo archive depuis {reference_date}")
+        
+        start_date = reference_date + timedelta(days=1)
+        end_date = start_date + timedelta(days=days - 1)
+        
+        url = "https://archive-api.open-meteo.com/v1/archive"
+        
+        params = {
+            "latitude": latitude,
+            "longitude": longitude,
+            "start_date": start_date.strftime("%Y-%m-%d"),
+            "end_date": end_date.strftime("%Y-%m-%d"),
+            "daily": [
+                "temperature_2m_max",
+                "temperature_2m_min",
+                "temperature_2m_mean",
+                "relative_humidity_2m_mean",
+                "precipitation_sum",
+                "sunshine_duration",
+                "shortwave_radiation_sum"
+            ],
+            "timezone": "Europe/Paris"
+        }
+    else:
+        # Mode normal : forecast
+        url = "https://api.open-meteo.com/v1/forecast"
+        
+        params = {
+            "latitude": latitude,
+            "longitude": longitude,
+            "daily": [
+                "temperature_2m_max",
+                "temperature_2m_min",
+                "temperature_2m_mean",
+                "relative_humidity_2m_mean",
+                "precipitation_sum",
+                "sunshine_duration",
+                "shortwave_radiation_sum"
+            ],
+            "forecast_days": days,
+            "timezone": "Europe/Paris"
+        }
     
     response = requests.get(url, params=params)
     data = response.json()
@@ -80,10 +123,23 @@ def calculate_features(
         HarvestRecord.date >= start_hist,
         HarvestRecord.date <= end_hist
     ).order_by(HarvestRecord.date).all()
-    
+   
     if not recent_harvests:
-        print(f"   ⚠️  Pas d'historique pour {variety_name}, skip")
-        return None
+        print(f"   ⚠️  Pas assez d'historique récent ({len(recent_harvests) if recent_harvests else 0} jours)")
+        print(f"   🔄 Utilisation de la même période année {target_date.year - 1}...")
+        start_hist_prev = start_hist.replace(year=start_hist.year - 1)
+        end_hist_prev = end_hist.replace(year=end_hist.year - 1)
+        recent_harvests = db.query(HarvestRecord).filter(
+            HarvestRecord.variety_id == variety_id,
+            HarvestRecord.date >= start_hist_prev,
+            HarvestRecord.date <= end_hist_prev
+        ).order_by(HarvestRecord.date).all()
+        
+        if not recent_harvests:
+            print(f"   ❌ Aucune donnée disponible pour {variety_name}, skip")
+            sys.exit()
+        
+    
     
     # Convertir en DataFrame
     hist_df = pd.DataFrame([{
@@ -111,7 +167,7 @@ def calculate_features(
         'sunshine_duration': w.sunshine_duration,
         'solar_radiation': w.solar_radiation
     } for w in weather_hist])
-    
+   
     # Calculer moyennes 7j et 14j
     kg_biological_7d = hist_df.tail(7)['kg_biological'].mean()
     kg_biological_14d = hist_df['kg_biological'].mean()
@@ -128,7 +184,6 @@ def calculate_features(
     week_of_year = target_date.isocalendar()[1]
     day_of_year = target_date.timetuple().tm_yday
     day_of_week = target_date.weekday()
-    
     # Days since season start (approximation : depuis le 1er janvier de l'année)
     season_start = date(target_date.year, 1, 1)
     days_since_season_start = (target_date - season_start).days
@@ -169,11 +224,13 @@ def calculate_features(
         'kg_biological_14d_mean': kg_biological_14d,
         'kg_per_plant': kg_per_plant
     }
-    
+
     return features
 
 
 def generate_predictions(days: int = 7):
+    
+    test_date = date(2025, 4, 15)  # ← CHANGEZ LA DATE ICI
     """
     Génère les prédictions pour les N prochains jours
     """
@@ -195,14 +252,15 @@ def generate_predictions(days: int = 7):
         
         # Récupérer prévisions météo
         print(f"🌤️  Récupération prévisions météo ({days} jours)...")
-        weather_forecasts = get_weather_forecast(days=days)
+        weather_forecasts = get_weather_forecast(days=days, test_date=test_date)
         print(f"✅ {len(weather_forecasts)} jours de prévisions\n")
         
         # Récupérer toutes les variétés
         varieties = db.query(Variety).all()
         print(f"🌱 {len(varieties)} variétés trouvées\n")
-        
-        today = datetime.now().date()
+        today = test_date if test_date else datetime.now().date()
+        if test_date:
+            print(f"🧪 MODE TEST : Date de référence = {today}\n")
         total_predictions = 0
         
         # Pour chaque variété
@@ -212,6 +270,10 @@ def generate_predictions(days: int = 7):
             # Pour chaque jour
             for day_offset in range(1, days + 1):
                 target_date = today + timedelta(days=day_offset)
+                # Skip uniquement les dimanches
+                if target_date.weekday() == 6:
+                    print(f"   ⏭️  {target_date} : Dimanche, pas de prédiction")
+                    continue
                 
                 # Récupérer config plants
                 plants_nbrs = get_current_plant_config(db, variety.id, target_date)

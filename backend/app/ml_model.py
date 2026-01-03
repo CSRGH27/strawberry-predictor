@@ -342,7 +342,7 @@ def train_biological_model():
     print(f"   1. Le modèle prédit kg_biological")
     print(f"   2. Pour obtenir la production à récolter :")
     print(f"      • Lundi/Mardi/Mercredi : kg_biological × 1/3")
-    print(f"      • Jeudi/Vendredi/Samedi : kg_biological × 1/2")
+    print(f"      • Jeudi/Vendredi : kg_biological × 1/2")
     print("="*70 + "\n")
     
     return best_model, feature_columns, results, test_data

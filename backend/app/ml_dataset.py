@@ -2,6 +2,7 @@ import pandas as pd
 from sqlalchemy.orm import Session
 from .database import SessionLocal
 from .models import HarvestRecord, WeatherData, Variety
+import numpy as np
 
 def create_ml_dataset():
     """
@@ -19,7 +20,7 @@ def create_ml_dataset():
         # ============================================================
         # ÉTAPE 1 : Récupérer les récoltes
         # ============================================================
-        print("📊 Étape 1/6 : Récupération des données de récolte...")
+        print("📊 Étape 1/8 : Récupération des données de récolte...")
         
         harvests_query = db.query(
             HarvestRecord.date,
@@ -38,7 +39,7 @@ def create_ml_dataset():
         # ============================================================
         # ÉTAPE 2 : Récupérer la météo
         # ============================================================
-        print("\n🌤️  Étape 2/6 : Récupération des données météo...")
+        print("\n🌤️  Étape 2/8 : Récupération des données météo...")
         
         weather_query = db.query(WeatherData)
         weather_df = pd.read_sql(weather_query.statement, db.bind)
@@ -60,7 +61,7 @@ def create_ml_dataset():
         # ============================================================
         # ÉTAPE 4 : Calcul des moyennes glissantes (7 jours)
         # ============================================================
-        print("\n📈 Étape 4/6 : Calcul des moyennes glissantes...")
+        print("\n📈 Étape 4/8 : Calcul des moyennes glissantes...")
         
         dataset = dataset.sort_values(['variety', 'date'])
         
@@ -83,14 +84,14 @@ def create_ml_dataset():
         
         print(f"   ✅ Moyennes glissantes calculées pour {len(dataset['variety'].unique())} variétés")
         
-        # ============================================================
-        # ÉTAPE 5 : Calculer la capacité biologique
-        # ============================================================
-        print("\n🌱 Étape 5/7 : Calcul de la capacité biologique...")
         
+        
+        # ============================================================
+        # ÉTAPE 5 : Filtrer les zéros suspects (oublis de saisie)
+        # ============================================================
+        print("\n🧹 Étape 5/8 : Filtrage des zéros suspects...")
         # Créer d'abord day_of_week pour déterminer la fraction récoltée
         dataset['day_of_week'] = pd.to_datetime(dataset['date']).dt.dayofweek
-        
         # Définir la fraction de plants récoltés par jour de semaine
         # 0=Lundi, 1=Mardi, 2=Mercredi, 3=Jeudi, 4=Vendredi, 5=Samedi, 6=Dimanche
         harvest_fraction = {
@@ -102,19 +103,55 @@ def create_ml_dataset():
             5: 1/2,  # Samedi
             6: 0     # Dimanche (sera filtré plus tard)
         }
-        
         # Appliquer la fraction correspondante
         dataset['harvest_fraction'] = dataset['day_of_week'].map(harvest_fraction)
+        total_before_zeros = len(dataset)
+        
+        # Supprimer les récoltes à 0 kg en jours ouvrés (Lun-Ven) et samedi
+        # Ce sont probablement des oublis de saisie
+        dataset = dataset[
+            ~((dataset['kg_produced'] == 0) & (dataset['day_of_week'].isin([0, 1, 2, 3, 4, 5])))
+        ]
+        
+        total_after_zeros = len(dataset)
+        removed_zeros = total_before_zeros - total_after_zeros
+        
+        print(f"   ✅ Lignes avant filtrage : {total_before_zeros}")
+        print(f"   ✅ Lignes après filtrage : {total_after_zeros}")
+        print(f"   ❌ Zéros suspects retirés (Lun-Sam) : {removed_zeros}")
+        
         
         # Calculer la production biologique (capacité réelle de tous les plants)
-        dataset['kg_biological'] = dataset['kg_produced'] / dataset['harvest_fraction']
+        dataset['kg_biological'] = np.where(dataset['harvest_fraction'] > 0,dataset['kg_produced'] / dataset['harvest_fraction'],np.nan)
         
-        # Pour éviter division par zéro sur les dimanches (avant filtrage)
-        dataset.loc[dataset['harvest_fraction'] == 0, 'kg_biological'] = 0
+         # ============================================================
+        # ÉTAPE 6 : Filtrer les dimanches (tous)
+        # ============================================================
+        print("\n🗑️  Étape 6/8 : Filtrage des dimanches...")
         
+        total_before_sundays = len(dataset)
+        
+        # Filtrer TOUS les dimanches (day_of_week = 6)
+        dataset = dataset[dataset['day_of_week'] != 6]
+        
+        total_after_sundays = len(dataset)
+        removed_sundays = total_before_sundays - total_after_sundays
+        
+        print(f"   ✅ Lignes avant filtrage : {total_before_sundays}")
+        print(f"   ✅ Lignes après filtrage : {total_after_sundays}")
+        print(f"   ❌ Dimanches retirés : {removed_sundays}")
+        
+       
+        
+        # ============================================================
+        # ÉTAPE 7 : Calculer la capacité biologique
+        # ============================================================
+        print("\n🌱 Étape 7/8 : Calcul de la capacité biologique...")
+        
+    
         print(f"   ✅ Capacité biologique calculée")
         print(f"   💡 Lun-Mar-Mer: kg_produced × 3")
-        print(f"   💡 Jeu-Ven-Sam: kg_produced × 2")
+        print(f"   💡 Jeu-Ven: kg_produced × 2")
         
         # Calculer les moyennes glissantes de la capacité biologique
         print(f"   🌱 Calcul des tendances de capacité biologique...")
@@ -130,9 +167,9 @@ def create_ml_dataset():
         print(f"   ✅ Tendances biologiques calculées")
         
         # ============================================================
-        # ÉTAPE 6 : Créer des features temporelles
+        # ÉTAPE 8 : Créer des features temporelles
         # ============================================================
-        print("\n🕐 Étape 6/7 : Création des features temporelles...")
+        print("\n🕐 Étape 8/8 : Création des features temporelles...")
         
         # Extraire des informations de la date
         dataset['month'] = dataset['date'].dt.month
@@ -154,27 +191,8 @@ def create_ml_dataset():
         dataset['kg_per_plant'] = dataset['kg_produced'] / (dataset['plants_nbrs'] + 1)
         
         print(f"   ✅ Features temporelles créées")
-        
-        # ============================================================
-        # ÉTAPE 7 : Filtrer les dimanches et sauvegarder
-        # ============================================================
-        print("\n💾 Étape 7/7 : Filtrage et sauvegarde...")
-        
-        total_before = len(dataset)
-        
-        # Filtrer les dimanches (day_of_week = 6)
-        dataset = dataset[dataset['day_of_week'] != 6]
-        
-        total_after = len(dataset)
-        removed = total_before - total_after
-        
-        print(f"   ✅ Lignes avant filtrage : {total_before}")
-        print(f"   ✅ Lignes après filtrage : {total_after}")
-        print(f"   ❌ Dimanches retirés : {removed}")
-        
-        # Enlever les lignes avec des valeurs manquantes
-        dataset_clean = dataset.dropna()
-        
+        #Enlever les lignes avec des valeurs manquantes
+        dataset_clean = dataset.dropna()    
         output_path = '/app/data/ml_dataset_simplified.csv'
         dataset_clean.to_csv(output_path, index=False)
         
